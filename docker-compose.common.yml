@@ -1,0 +1,7 @@
+services:
+  database-common:
+    image: ${CONTAINER_IMAGE}
+    restart: always
+    env_file: ".env"
+    volumes:
+      - .:${WORKSPACE_MOUNT_PATH}:ro

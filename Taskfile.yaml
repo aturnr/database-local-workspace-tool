@@ -1,0 +1,200 @@
+version: '3'
+
+dotenv: [.env]
+
+vars:
+  DOTENV_PATH: ".env"
+  CONTAINER_NAME: db-query-single
+
+env:
+  COMPOSE_PROJECT_NAME: db-query-multi
+
+tasks:
+  
+  #
+  # Miscelenous
+  #
+
+  check-setup:
+    desc: Checks that initial requirements and dependencies exist.
+    summary: |
+      Checks that initial requirements and dependencies exist.
+
+      Example: 
+       - task check-setup
+    cmds:
+      - cmd: ./scripts/check-setup.sh
+        silent: true
+    
+  #
+  # Single Container Workflow
+  #
+
+  db:start:
+    desc: Creates and starts the container of MySQL Database (single-database mode).
+    summary: |
+      Creates and starts the container of MySQL Database (single-database mode).
+
+      If the container already exists, it's recreated automatically.
+
+      Example:
+       - task db:start SQL_FILE=dumps/host1_fulldump_20240617_211713.sql
+    requires:
+      vars: [CONTAINER_NAME, CONTAINER_IMAGE, WORKSPACE_MOUNT_PATH, SQL_FILE]
+    vars:
+      CONTAINER_EXISTS: docker container ls -a | grep -q {{.CONTAINER_NAME}} && echo true || echo false
+    cmds:
+      - cmd: '{{if .CONTAINER_EXISTS}}docker rm -f {{.CONTAINER_NAME}} > /dev/null{{end}}'
+        silent: true
+      - cmd: printf "Starting a single database container...\n"
+        silent: true
+      - cmd: docker container run --name {{.CONTAINER_NAME}} --env-file={{.DOTENV_PATH}} -v .:{{.WORKSPACE_MOUNT_PATH}}:ro -d {{.CONTAINER_IMAGE}}
+      - cmd: printf "Loading the MySQL file into database...\n"
+        silent: true
+      - cmd: docker container exec {{.CONTAINER_NAME}} {{.WORKSPACE_MOUNT_PATH}}/scripts/load-sql-file.sh {{.WORKSPACE_MOUNT_PATH}}/{{.SQL_FILE}}
+      - cmd: printf "\Database has started successfully!\n"
+        silent: true
+
+  db:bash:
+    desc: Accesses shell in the running container of MySQL Database (single-database mode).
+    summary: |
+      Accesses shell in the running container of MySQL Database (single-database mode).
+
+      Example:
+       - task db:bash
+    requires:
+      vars: [CONTAINER_NAME]
+    cmds:
+      - cmd: docker container exec -i -t {{.CONTAINER_NAME}} /bin/bash
+
+  db:mysql:
+    desc: Accesses the mysql console in the running container of MySQL Database (single-database mode).
+    summary: |
+      Accesses the mysql console in the running container of MySQL Database (single-database mode).
+
+      Example:
+       - task db:mysql
+       - task db:mysql -- -e show databases;
+    requires:
+      vars: [CONTAINER_NAME]
+    cmds:
+      - cmd: docker container exec -i -t {{.CONTAINER_NAME}} mysql {{.CLI_ARGS}}
+
+  db:stop:
+    desc: Stops and removes the running container of MySQL Database (single-database mode).
+    summary: |
+      Stops and removes the running container of MySQL Database (single-database mode).
+
+      Example:
+       - task db:stop
+    requires:
+      vars: [CONTAINER_NAME]
+    cmds:
+      - cmd: printf "Stoping single database container...\n"
+        silent: true
+      - cmd: docker container stop {{.CONTAINER_NAME}}
+      - cmd: docker container rm {{.CONTAINER_NAME}}
+      - cmd: printf "\nDatabase has stopped.\n"
+        silent: true
+
+  db:query:
+    desc: Queries the MySql Database (single database mode).
+    summary: |
+      Queries the MySql Database (single container mode).
+
+      Example:
+       - task db:query QUERY="show databases;"
+    requires:
+      vars: [CONTAINER_NAME, QUERY]
+    cmds:
+      - cmd: printf "Running query against database.\n"
+        silent: true
+      - docker exec -t {{.CONTAINER_NAME}} mysql -e '{{.QUERY}}' 
+
+  #
+  # Multi Container Workflow
+  #
+
+  multi-db:start:
+    desc: Creates and starts the docker compose MySQL Database services (multi-database mode).
+    summary: |
+      Creates and starts the docker compose MySQL Database services (multi-database mode).
+
+      If services already exist, they're recreated automatically.
+
+      Example:
+       - task multi-db:start
+    requires:
+      vars: [WORKSPACE_MOUNT_PATH]
+    vars:
+      SERVICE_NAMES:
+        sh: docker compose config --services | sort
+    cmds:
+      - cmd: printf "Starting multiple databases...\n"
+      - cmd: docker compose up -d --wait --force-recreate
+      - cmd: printf "\nLoading the MySQL files into databases...\n"
+        silent: true
+      - for: { var: SERVICE_NAMES, as: SERVICE_NAME }
+        cmd: docker compose exec -t {{.SERVICE_NAME}} {{.WORKSPACE_MOUNT_PATH}}/scripts/load-sql-file.sh
+      - cmd: printf "\nDatabases have started successfuly!\n"
+        silent: true
+
+  multi-db:bash:
+    desc: Accesses shell in the specified docker compose MySQL Database service (multi-database mode).
+    summary: |
+      Accesses shell in the specified docker compose MySQL Database service (multi-database mode).
+
+      Example:
+       - task db:bash SERVICE="database1"
+    requires:
+      vars: [SERVICE]
+    cmds:
+      - cmd: docker compose exec -i -t {{.SERVICE}} /bin/bash
+
+  multi-db:mysql:
+    desc: Accesses the mysql console in the specified docker compose MySQL Database service (multi-database mode).
+    summary: |
+      Accesses the mysql console in the specified docker compose MySQL Database service (multi-database mode).
+
+      Example:
+       - task db:mysql SERVICE="database1"
+       - task db:mysql SERVICE="database1" -- -e show databases;
+    requires:
+      vars: [SERVICE]
+    cmds:
+      - cmd: docker compose exec -i -t {{.SERVICE}} mysql {{.CLI_ARGS}}
+
+  multi-db:stop:
+    desc: Stops and removes the docker compose MySQL Databases services (multi-database mode).
+    summary: |
+      Stops and removes the docker compose MySQL Databases services (multi-database mode).
+
+      Example:
+       - task multi-db:stop
+    cmds:
+      - cmd: printf "Stoping multiple databases...\n"
+        silent: true
+      - cmd: docker compose down
+      - cmd: printf "\nDatabases have stopped.\n"
+        silent: true
+
+  multi-db:query:
+    desc: Queries all the services of MySql Databases (multi-database mode).
+    summary: |
+      Queries all the services of MySql Databases (multi-database mode).
+
+      Example:
+       - task multi-db:query QUERY="show databases;"
+    requires:
+      vars: [QUERY]
+    vars:
+      SERVICES:
+        sh: docker compose config --services | sort
+    cmds:
+      - cmd: printf "Querying multiple databases...\n"
+        silent: true
+      - for: { var: SERVICES, as: SERVICE }
+        cmd: printf "\n{{.SERVICE}}\n"; docker compose exec -t {{.SERVICE}} mysql -e '{{.QUERY}}'
+        ignore_error: true
+      - cmd: printf "\nDone\n"
+        silent: true
